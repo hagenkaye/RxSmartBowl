@@ -269,7 +269,7 @@ clear_memory:
     sts     DAC0_DATA,r_tmp
 
 ;; AC setup
-    ldi     r_tmp,0b00111111            ; Interrupt on positive edge, 50mv hysteresis, low power mode
+    ldi     r_tmp,0b00111001            ; Interrupt on positive edge, 50mv hysteresis, low power mode
     sts     AC0_CTRLA,r_tmp
     ldi     r_tmp,0x03                  ; compare with DAC
     sts     AC0_MUXCTRLA,r_tmp
@@ -308,7 +308,7 @@ tx_detected:
     or      r_cat_search_timer,r_cat_search_timer
     brne    already_searching
     cat_led_on                              ; turn on cat led
-    ldi     r_cat_search_timer,100          ; search for a cat, maximum 100ms
+    ldi     r_cat_search_timer,200          ; search for a cat, maximum 100ms
     ldi     r_uart_count,0                  ; number of bytes read from UART
 
 flush_rx_buffer:
@@ -418,6 +418,8 @@ battery_ok:
     battery_led_off
 battery_test_done:
 
+    or      r_cat_search_timer,r_cat_search_timer
+    breq    is_motor_on
     dec     r_cat_search_timer
     brne    is_motor_on
     cat_led_off                 ;; turn off rx, cat was not found
@@ -535,7 +537,7 @@ shift_completed:
     ret    
 median_calculated:
     ld      r_tmp,z
-    ldi     r_tmp_h,8
+    ldi     r_tmp_h,25
     add     r_tmp,r_tmp_h
     sts     DAC0_DATA,r_tmp
 
