@@ -17,6 +17,8 @@
     .def    r_battery_v = r5        ; battery voltage
     .def    r_buttons = r6          ; button press sensor
     .def    r_tag_voltage = r7      ; battery voltage of tag detected
+    .def    r_motor_off_diff = r8   ; voltage diff with motor off
+    .def    r_motor_on_diff = r9    ; voltage diff with motor on
 	.def    r_tmp = r16             ; temporary register
 	.def    r_tmp_l = r16
 	.def    r_tmp_h = r17
@@ -28,63 +30,68 @@
     .def    r_cat_detected_timer_l = r24
     .def    r_cat_detected_timer_h = r25
 
+    .equ    A_RSSI = 0x07
+    .equ    A_MOTOR = 0x03
+    .equ    A_BAT = 0x05
+    .equ    A_BUTTON = 0x0A
+
 ;; macros
     .macro  unlock
     out     CPU_CCP,r_unprotect
     .endmacro
 
     .macro  cat_led_on
-    sbi     VPORTB_OUT,0
+    sbi     VPORTA_OUT,1
     .endmacro
 
     .macro  cat_led_off
-    cbi     VPORTB_OUT,0
+    cbi     VPORTA_OUT,1
     .endmacro
 
     .macro  battery_led_on
-    sbi     VPORTB_OUT,1
+    sbi     VPORTB_OUT,0
     .endmacro
 
     .macro  battery_led_off
-    cbi     VPORTB_OUT,1
+    cbi     VPORTB_OUT,0
     .endmacro
 
     .macro  open_lid
     sbi     VPORTA_OUT,4
-    cbi     VPORTA_OUT,5
+    cbi     VPORTB_OUT,2
     sbr     r_mode,0b00010000
     cbr     r_mode,0b00101100
     .endmacro
 
     .macro  lid_now_open
     cbi     VPORTA_OUT,4
-    cbi     VPORTA_OUT,5
+    cbi     VPORTB_OUT,2
     sbr     r_mode,0b00000100
     cbr     r_mode,0b00111000
     .endmacro
 
     .macro  close_lid
     cbi     VPORTA_OUT,4
-    sbi     VPORTA_OUT,5
+    sbi     VPORTB_OUT,2
     sbr     r_mode,0b00100000
     cbr     r_mode,0b00011100
     .endmacro
 
     .macro  lid_now_closed
     cbi     VPORTA_OUT,4
-    cbi     VPORTA_OUT,5
+    cbi     VPORTB_OUT,2
     sbr     r_mode,0b00001000
     cbr     r_mode,0b00110100
     .endmacro
 
     .macro  LID_LOCKED
     sbr     r_mode,0b00000010
-    sbi     VPORTB_OUT,2        ; turn on door led
+    sbi     VPORTA_OUT,2        ; turn on door led
     .endmacro
 
     .macro  LID_UNLOCKED
     cbr     r_mode,0b00000010
-    cbi     VPORTB_OUT,2        ; turn off door led
+    cbi     VPORTA_OUT,2        ; turn off door led
     .endmacro
 
     .macro SKIP_IF_LID_UNLOCKED
@@ -201,15 +208,15 @@ clear_memory:
 
 ;; Port A configuration
 ;; PA0 - not used (used as UPDI)
-;; PA1 - Analog in - Button sensor
-;; PA2 - Analog in - Battery voltage
+;; PA1 - Digital Out - Cat LED
+;; PA2 - Digital Out - Door LED
 ;; PA3 - Analog in - Motor current sense
-;; PA4 - Motor Controller
-;; PA5 - Motor Controller
+;; PA4 - Digital Out - Motor Controller
+;; PA5 - Analog In - Battery voltage
 ;; PA6 - DAC output
 ;; PA7 - Analog in - RSSI value
 
-    ldi     r_tmp,0b00110000            ; Motor controller set to output
+    ldi     r_tmp,0b00010110            ; Set digital output pins
     sts     PORTA_DIR,r_tmp             
     sts     PORTA_OUT,r_zero            ; outputs are set low
 
@@ -227,11 +234,11 @@ clear_memory:
     st      x+,r_tmp                    ; Pin A7 NO ISR, input disabled
 
 ;; Port B configuration
-;; PB0 - Digital Out, Cat LED
-;; PB1 - Digital Out, Battery Low LED
-;; PB2 - Digital Out, Door open LED
+;; PB0 - Digital Out, Battery LED
+;; PB1 - Analog In, Button sense
+;; PB2 - Digital Out, Motor Controller
 ;; PB3 - Rx Input from Rf receiver
-    ldi     r_tmp,0b00000111            ; LEDs set to output
+    ldi     r_tmp,0b00000101            ; set digital output pins
     sts     PORTB_DIR,r_tmp
     sts     PORTB_OUT,r_zero            ; outputs are set low
 
@@ -283,18 +290,20 @@ clear_memory:
     sts     ADC0_CTRLC,r_tmp
     ldi     r_tmp,0x1F                  ; sample length
     sts     ADC0_SAMPCTRL,r_tmp
-    ldi     r_tmp,0x07                  ; start with RSSI 
+    ldi     r_tmp,A_RSSI                ; start with RSSI 
     sts     ADC0_MUXPOS,r_tmp
     ldi     r_tmp,0x01                  ; enable interrupt for result ready
     sts     ADC0_INTCTRL,r_tmp
     eor     r_adc_count,r_adc_count
     sts     ADC0_COMMAND,r_tmp          ; start a conversion
 
+    ldi     r_tmp,0xFF
+    mov     r_tag_voltage,r_tmp
+    mov     r_motor_off_diff,r_zero
+    mov     r_motor_on_diff,r_zero
+
     mov     r_mode,r_zero
-    open_lid
-
     rcall   clear_median_buffer
-
     sei
 loop:
     rjmp    loop
@@ -341,7 +350,7 @@ read_voltage_of_tag:
     SKIP_IF_LID_UNLOCKED
     rjmp    stop_cat_detection                      ; if lid is locked do nothing
     mov     r_tmp,r_rssi
-    cpi     r_tmp,0x90
+    cpi     r_tmp,0xA0
     brcs    cat_out_of_threshold                    ; rssi value has to be high enough to start
     CAT_DETECTED
     ldi     r_cat_detected_timer_l,LOW(10000)       ; wait 10 seconds after last cat detection
@@ -372,23 +381,23 @@ adc_result_ready:
     cpi     r_adc_count,0
     brne    is_it_motor_v
     mov     r_rssi,r_tmp
-    ldi     r_tmp,0x03                  ; read motor voltage next
+    ldi     r_tmp,A_MOTOR                  ; read motor voltage next
     rjmp    adc_result_done
 is_it_motor_v:
     cpi     r_adc_count,1
     brne    is_it_battery_v
     mov     r_motor_v,r_tmp
-    ldi     r_tmp,0x02                  ; read battery voltage next
+    ldi     r_tmp,A_BAT                    ; read battery voltage next
     rjmp    adc_result_done
 is_it_battery_v:
     cpi     r_adc_count,2
     brne    it_is_button
     mov     r_battery_v,r_tmp
-    ldi     r_tmp,0x01                  ; read buttons next
+    ldi     r_tmp,A_BUTTON                 ; read buttons next
     rjmp    adc_result_done
 it_is_button:
     mov     r_buttons,r_tmp
-    ldi     r_tmp,0x07                  ; go back and read rssi threshold next
+    ldi     r_tmp,A_RSSI                  ; go back and read rssi threshold next
     ldi     r_adc_count,0xFF
 adc_result_done:
     sts     ADC0_MUXPOS,r_tmp
@@ -410,7 +419,7 @@ main_logic_loop:
     rjmp    battery_test_done
 tag_battery_ok:
     mov     r_tmp,r_battery_v
-    cpi     r_tmp,0x88
+    cpi     r_tmp,0xC0
     brcc    battery_ok
     battery_led_on
     rjmp    battery_test_done
@@ -430,6 +439,17 @@ is_motor_on:
     rjmp    test_lid_open
     SKIP_IF_LID_NOT_CLOSING
     rjmp    test_lid_closed
+
+    mov     r_tmp,r_battery_v           ; get difference between battery v and motor v
+    sub     r_tmp,r_motor_v
+    mov     r_motor_off_diff,r_tmp
+
+    or      r_mode,r_mode               ; if r_mode is zero, then open the lid
+    brne    test_button_press
+
+    LID_LOCKED
+    open_lid
+
     rjmp    test_button_press
 
 test_lid_open:
@@ -449,7 +469,10 @@ test_lid_closed_reti:
 test_motor_current:
     mov     r_tmp,r_battery_v               ;; if there is a significant difference between battery
     sub     r_tmp,r_motor_v                 ;; voltage and motor voltage, then the motor has hit the
-    cpi     r_tmp,8                         ;; the end (either closed or open)
+    mov     r_motor_on_diff,r_tmp           ;; the end (either closed or open)
+
+    sub     r_tmp,r_motor_off_diff
+    cpi     r_tmp,6
     brsh    test_for_shut_motor_off
     mov     r_motor_count,r_zero            ;; reset motor current count
     clz
@@ -473,7 +496,7 @@ test_button_press:
     BUTTON_PRESSED
     SKIP_IF_LID_UNLOCKED
     rjmp    unlock_lid
-    SKIP_IF_LID_OPEN
+    SKIP_IF_LID_CLOSED
     rjmp    button_close_lid
 button_open_lid:
     LID_LOCKED
