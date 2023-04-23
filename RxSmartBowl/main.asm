@@ -516,6 +516,7 @@ no_buttons_pressed:
 test_cat_nearby:
     SKIP_IF_CAT_DETECTED
     rjmp    test_for_reopen_lid
+    CAT_NOT_DETECTED                ;; toggle it off
     SKIP_IF_LID_OPEN
     reti
 cat_closes_lid:
