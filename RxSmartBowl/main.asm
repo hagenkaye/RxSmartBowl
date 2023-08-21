@@ -84,18 +84,22 @@
     cbr     r_mode,0b00110100
     .endmacro
 
-    .macro  LID_LOCKED
+    .macro  CAT_OPENS_LID
     sbr     r_mode,0b00000010
     sbi     VPORTA_OUT,2        ; turn on door led
     .endmacro
 
-    .macro  LID_UNLOCKED
+    .macro  CAT_CLOSES_LID
     cbr     r_mode,0b00000010
     cbi     VPORTA_OUT,2        ; turn off door led
     .endmacro
 
-    .macro SKIP_IF_LID_UNLOCKED
+    .macro SKIP_IF_CAT_CLOSES_LID
     sbrc    r_mode,1
+    .endmacro
+
+    .macro SKIP_IF_CAT_OPENS_LID
+    sbrs    r_mode,1
     .endmacro
 
     .macro SKIP_IF_LID_NOT_OPENING
@@ -347,8 +351,6 @@ uart_read_byte:
     breq    test_byte
 read_voltage_of_tag:
     mov     r_tag_voltage,r_tmp
-    SKIP_IF_LID_UNLOCKED
-    rjmp    stop_cat_detection                      ; if lid is locked do nothing
     mov     r_tmp,r_rssi
     cpi     r_tmp,0xA0
     brcs    cat_out_of_threshold                    ; rssi value has to be high enough to start
@@ -447,7 +449,7 @@ is_motor_on:
     or      r_mode,r_mode               ; if r_mode is zero, then open the lid
     brne    test_button_press
 
-    LID_LOCKED
+    CAT_CLOSES_LID
     open_lid
 
     rjmp    test_button_press
@@ -494,20 +496,14 @@ test_button_press:
     SKIP_IF_BUTTON_NOT_PRESSED
     rjmp    test_cat_nearby
     BUTTON_PRESSED
-    SKIP_IF_LID_UNLOCKED
-    rjmp    unlock_lid
-    SKIP_IF_LID_CLOSED
-    rjmp    button_close_lid
-button_open_lid:
-    LID_LOCKED
-    open_lid
-    reti
-button_close_lid:
-    LID_LOCKED
+    SKIP_IF_CAT_CLOSES_LID
+    rjmp    cat_will_close_lid
+    CAT_OPENS_LID
     close_lid
     reti
-unlock_lid:
-    LID_UNLOCKED
+cat_will_close_lid:
+    CAT_CLOSES_LID
+    open_lid
     reti
 
 no_buttons_pressed:
@@ -517,10 +513,18 @@ test_cat_nearby:
     SKIP_IF_CAT_DETECTED
     rjmp    test_for_reopen_lid
     CAT_NOT_DETECTED                ;; toggle it off
+    SKIP_IF_CAT_CLOSES_LID
+    rjmp    cat_detected_open_lid
+cat_detected_close_lid:
     SKIP_IF_LID_OPEN
     reti
-cat_closes_lid:
     close_lid
+    reti
+
+cat_detected_open_lid:
+    SKIP_IF_LID_CLOSED
+    reti
+    open_lid
     reti
 
 test_for_reopen_lid:
@@ -529,7 +533,14 @@ test_for_reopen_lid:
     breq    adc_result_exit
     sbiw    r_cat_detected_timer_l,0x01
     brne    adc_result_exit
+
+    SKIP_IF_CAT_CLOSES_LID
+    rjmp    reclose_the_lid
     open_lid
+    reti
+
+reclose_the_lid:
+    close_lid
 
 adc_result_exit:
     reti
