@@ -11,7 +11,7 @@
 ;; registers used by the program	
 	.def    r_zero = r0             ; always zero
 	.def    r_unprotect = r1        ; set to unprotect signature
-    .def    r_rssi_thres = r2       ; rx rssi threshold value
+    .def    r_tick_count = r2       ; 1ms tick count
     .def    r_rssi = r3             ; current rssi
     .def    r_motor_v = r4          ; motor current sense (voltage)
     .def    r_battery_v = r5        ; battery voltage
@@ -276,7 +276,7 @@ clear_memory:
 ;; DAC setup
     ldi     r_tmp,0b01000001
     sts     DAC0_CTRLA,r_tmp
-    ldi     r_tmp,0xFF
+    ldi     r_tmp,0x8F                  ; new bowl was 0x8f, old bowl was 0x80
     sts     DAC0_DATA,r_tmp
 
 ;; AC setup
@@ -307,9 +307,13 @@ clear_memory:
     mov     r_motor_on_diff,r_zero
 
     mov     r_mode,r_zero
-    rcall   clear_median_buffer
+
+    ldi     r_tmp,0x01                  ; enable sleep mode = idle
+    sts     SLPCTRL_CTRLA,r_tmp
+
     sei
 loop:
+    sleep
     rjmp    loop
 
 ;; AC interupt, we get this when a Tx Tag has been detected
@@ -352,11 +356,11 @@ uart_read_byte:
 read_voltage_of_tag:
     mov     r_tag_voltage,r_tmp
     mov     r_tmp,r_rssi
-    cpi     r_tmp,0xA0
+    cpi     r_tmp,0xBC                         ; new bowl was 0xBC, old bowl is 0xA0
     brcs    cat_out_of_threshold                    ; rssi value has to be high enough to start
     CAT_DETECTED
-    ldi     r_cat_detected_timer_l,LOW(10000)       ; wait 10 seconds after last cat detection
-    ldi     r_cat_detected_timer_h,HIGH(10000)
+    ldi     r_cat_detected_timer_l,LOW(5000)       ; wait 5 seconds after last cat detection
+    ldi     r_cat_detected_timer_h,HIGH(5000)
     rjmp    stop_cat_detection
 
 test_byte:
@@ -411,8 +415,10 @@ adc_result_done:
 
 ;; main logic loop - run every ~1ms
 main_logic_loop:
-    mov     r_tmp,r_rssi                ; calculate median value of rssi
-    rcall   calc_median
+    inc     r_tick_count
+    mov     r_tmp,r_tick_count
+    andi    r_tmp,0x80
+    breq    tag_battery_ok
 
     mov     r_tmp,r_tag_voltage
     cpi     r_tmp,0xBE
@@ -482,7 +488,7 @@ test_motor_current:
 
 test_for_shut_motor_off:
     inc     r_motor_count
-    cpi     r_motor_count,25                ;; over current should  last for 25ms
+    cpi     r_motor_count,50                ;; over current should  last for 50ms
     brne    test_motor_ret
     mov     r_motor_count,r_zero
 test_motor_ret:
@@ -545,44 +551,4 @@ reclose_the_lid:
 adc_result_exit:
     reti
 
-
-calc_median:
-    ldi     XL,LOW(INTERNAL_SRAM_START)
-    ldi     XH,HIGH(INTERNAL_SRAM_START)
-find_insert_point:
-    ld      r_tmp_h,x+
-    cp      r_tmp,r_tmp_h
-    brlo    found_insert_point
-    cp      XL,YL
-    breq    median_calculated
-    rjmp    find_insert_point
-found_insert_point:
-    sbiw    XL,1
-    st      x+,r_tmp
-shift_values_over:
-    cp      XL,YL
-    breq    shift_completed
-    ld      r_tmp,x
-    st      x+,r_tmp_h
-    mov     r_tmp_h,r_tmp
-    rjmp    shift_values_over
-shift_completed:
-    cpi     r_tmp_h,0xFF
-    brne    median_calculated
-    ret    
-median_calculated:
-    ld      r_tmp,z
-    ldi     r_tmp_h,25
-    add     r_tmp,r_tmp_h
-    sts     DAC0_DATA,r_tmp
-
-clear_median_buffer:
-    ldi     XL,LOW(INTERNAL_SRAM_START)
-    ldi     XH,HIGH(INTERNAL_SRAM_START)
-    ldi     r_tmp,0xFF
-clear_median_buffer_loop:
-    st      x+,r_tmp
-    cpse    XL,YL
-    rjmp    clear_median_buffer_loop
-    ret
 
